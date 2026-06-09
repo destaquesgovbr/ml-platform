@@ -3,7 +3,7 @@
 Demonstra três features de GenAI do MLflow de forma OFFLINE e plugável:
 
 - **tracing** (``pipeline.summarize`` decorado com ``@mlflow.trace``);
-- **avaliação** (``eval.run_evaluation`` com ``mlflow.evaluate`` + métricas custom
+- **avaliação** (``eval.run_evaluation`` com ``mlflow.models.evaluate`` + métricas custom
   determinísticas);
 - **prompt registry** (``prompts.register_summary_prompt``).
 

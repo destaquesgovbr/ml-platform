@@ -1,6 +1,5 @@
-"""Testes das métricas custom determinísticas e do mlflow.evaluate (offline)."""
+"""Testes das métricas custom determinísticas e do mlflow.models.evaluate (offline)."""
 
-import mlflow
 import pandas as pd
 
 from news_genai import eval as ev
@@ -40,7 +39,7 @@ def test_build_eval_dataset_formato():
 
 
 def test_run_evaluation_offline(local_tracking):
-    """mlflow.evaluate roda sobre um dataframe pequeno com o stub determinístico."""
+    """mlflow.models.evaluate roda sobre um dataframe pequeno com o stub determinístico."""
     result = ev.run_evaluation()
     assert result is not None
     # As métricas custom determinísticas devem aparecer no resultado agregado.

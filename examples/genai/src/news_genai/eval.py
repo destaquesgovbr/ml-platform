@@ -1,6 +1,6 @@
-"""Avaliação determinística com ``mlflow.evaluate`` e métricas custom.
+"""Avaliação determinística com ``mlflow.models.evaluate`` e métricas custom.
 
-Monta um pequeno dataset de avaliação e roda ``mlflow.evaluate`` sobre o stub
+Monta um pequeno dataset de avaliação e roda ``mlflow.models.evaluate`` sobre o stub
 determinístico de sumarização, usando duas métricas custom OFFLINE:
 
 - ``compression_ratio``: tamanho do resumo / tamanho do original (menor = mais
@@ -10,10 +10,11 @@ determinístico de sumarização, usando duas métricas custom OFFLINE:
 Nenhuma métrica depende de LLM-as-judge nem de rede — são puramente determinísticas,
 o que torna os testes reprodutíveis. (O README mostra como adicionar um juiz real.)
 
-Nota: usamos a API clássica ``mlflow.evaluate`` (com ``make_metric``), ideal para
-métricas custom *determinísticas* sobre um dataframe. O MLflow 3.x emite um aviso
-de deprecação sugerindo ``mlflow.genai.evaluate`` — essa API é voltada a *scorers*
-(LLM-as-judge), e o README mostra como migrar para ela quando quiser um juiz real.
+Nota: usamos ``mlflow.models.evaluate`` (com ``make_metric``), a API recomendada no
+MLflow 3.x para métricas custom *determinísticas* sobre um dataframe — mantém total
+compatibilidade com a antiga ``mlflow.evaluate`` (que foi descontinuada na 3.0). Para
+LLM-as-judge existe ``mlflow.genai.evaluate`` (baseada em *scorers*); o README mostra
+como migrar para ela quando quiser um juiz real.
 """
 
 from __future__ import annotations
@@ -140,7 +141,7 @@ def build_eval_dataset() -> pd.DataFrame:
 
 
 def run_evaluation(model_fn=None):
-    """Roda ``mlflow.evaluate`` sobre o dataset com as métricas custom.
+    """Roda ``mlflow.models.evaluate`` sobre o dataset com as métricas custom.
 
     As predições são calculadas previamente (com ``model_fn`` ou o stub
     determinístico) e gravadas numa coluna ``prediction`` do dataset. Isso mantém
@@ -159,7 +160,7 @@ def run_evaluation(model_fn=None):
         pipeline.summarize(text, model_fn=model_fn) for text in df["inputs"]
     ]
     with mlflow.start_run(run_name="genai-eval"):
-        result = mlflow.evaluate(
+        result = mlflow.models.evaluate(
             data=df,
             predictions="prediction",
             extra_metrics=[compression_ratio_metric(), keyword_coverage_metric()],

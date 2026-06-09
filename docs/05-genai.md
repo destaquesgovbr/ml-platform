@@ -1,7 +1,7 @@
 # 05 — GenAI (tracing, evaluate, prompt registry)
 
 O MLflow tem um conjunto de recursos para **GenAI**: rastreamento (tracing) de chamadas a LLMs,
-avaliação automatizada (`mlflow.evaluate`, inclusive LLM-as-judge) e um **prompt registry** para
+avaliação automatizada (`mlflow.models.evaluate`, inclusive LLM-as-judge) e um **prompt registry** para
 versionar prompts. Tudo isso usa o mesmo servidor DGB (metadados via IAP, artefatos no GCS).
 
 Pré-requisito: já ter configurado o cliente — veja [Getting Started no PC](01-getting-started-pc.md)
@@ -76,9 +76,9 @@ with mlflow.start_run(run_name="classificador-local"):
 > O tracing **não exige** chave de API: o caminho manual (`@mlflow.trace`) funciona com qualquer
 > código. Use-o quando não quiser que todos da equipe precisem de uma chave Anthropic/OpenAI.
 
-## 2. `mlflow.evaluate` — avaliação automatizada
+## 2. `mlflow.models.evaluate` — avaliação automatizada
 
-`mlflow.evaluate` roda métricas sobre um conjunto de avaliação e registra os resultados no run.
+`mlflow.models.evaluate` roda métricas sobre um conjunto de avaliação e registra os resultados no run.
 Funciona desde métricas determinísticas até **LLM-as-judge** (um modelo avalia as respostas).
 
 ```python
@@ -102,7 +102,7 @@ def minha_funcao(df: pd.DataFrame) -> list[str]:
     return [classificar_noticia(t) for t in df["inputs"]]
 
 with mlflow.start_run(run_name="eval-classificacao"):
-    resultado = mlflow.evaluate(
+    resultado = mlflow.models.evaluate(
         model=minha_funcao,
         data=dados,
         targets="ground_truth",

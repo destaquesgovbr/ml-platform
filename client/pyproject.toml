@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Destaques Gov.BR — Data Science" }]
 dependencies = [
-    "mlflow>=2.14,<3",
+    "mlflow==3.13.0",
     "google-auth>=2.30,<3",
     "google-cloud-storage>=2.16,<3",
 ]

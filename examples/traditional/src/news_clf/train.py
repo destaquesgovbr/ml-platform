@@ -135,17 +135,26 @@ def train(
         metrics = compute_metrics(y_test, y_pred)
         mlflow.log_metrics(metrics)
 
-        # Loga o modelo em "model/" (caminho de artefato)
+        # Loga o modelo com nome lógico "model".
+        #
+        # MLflow 3.x: o modelo é um *logged model* de primeira classe (com
+        # ``model_id`` próprio), não mais um artefato em ``runs:/<run>/model``.
+        # O parâmetro ``artifact_path`` foi descontinuado em favor de ``name``.
+        # O ``ModelInfo`` retornado traz ``model_id`` e ``model_uri``
+        # (``models:/<model_id>``), que é a forma recomendada de referenciar o
+        # modelo daqui em diante.
         registered_name = REGISTERED_MODEL_NAME if register else None
-        mlflow.sklearn.log_model(
+        model_info = mlflow.sklearn.log_model(
             sk_model=pipeline,
-            artifact_path="model",
+            name="model",
             registered_model_name=registered_name,
         )
 
         result: Dict[str, object] = {
             "run_id": run.info.run_id,
             "experiment_id": experiment_id,
+            "model_id": model_info.model_id,
+            "model_uri": model_info.model_uri,
             **metrics,
         }
 

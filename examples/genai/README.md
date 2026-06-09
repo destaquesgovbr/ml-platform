@@ -4,7 +4,7 @@ Demonstra três features de **GenAI do MLflow** sobre um caso de uso de notícia
 governo federal (gov.br):
 
 - **Tracing** — `@mlflow.trace` captura as chamadas do pipeline como *traces*.
-- **Avaliação** — `mlflow.evaluate` com métricas custom **determinísticas**
+- **Avaliação** — `mlflow.models.evaluate` com métricas custom **determinísticas**
   (comprimento/keywords), além de um caminho documentado para *LLM-as-judge*.
 - **Prompt registry** — registra/recupera templates de prompt versionados.
 
@@ -20,7 +20,7 @@ examples/genai/
 │   ├── __init__.py
 │   ├── pipeline.py     # summarize()/classify() com @mlflow.trace; stub default
 │   ├── prompts.py      # templates de prompt + prompt registry
-│   └── eval.py         # dataset de avaliação + mlflow.evaluate + métricas custom
+│   └── eval.py         # dataset de avaliação + mlflow.models.evaluate + métricas custom
 ├── providers.py        # providers reais (Anthropic/OpenAI) — documentado
 ├── tests/              # testes OFFLINE e DETERMINÍSTICOS (tracking local em tmp_path)
 ├── requirements.txt            # mlflow, pandas (pinned)
@@ -64,9 +64,9 @@ traces = mlflow.search_traces()
 print(traces[["trace_id", "request", "response"]])
 ```
 
-## Avaliação (`mlflow.evaluate`)
+## Avaliação (`mlflow.models.evaluate`)
 
-`eval.run_evaluation()` monta um pequeno dataset de notícias e roda `mlflow.evaluate`
+`eval.run_evaluation()` monta um pequeno dataset de notícias e roda `mlflow.models.evaluate`
 com duas métricas custom **determinísticas**:
 
 - `compression_ratio` — `len(resumo) / len(original)` (menor = mais comprimido);
