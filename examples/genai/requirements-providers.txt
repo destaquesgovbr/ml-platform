@@ -1,0 +1,9 @@
+# Dependências OPCIONAIS de providers reais de LLM.
+# NÃO são instaladas nos testes (os testes usam um stub determinístico offline).
+# Instale somente quando for plugar um provider real:
+#     pip install -r requirements-providers.txt
+#
+# Anthropic (Claude) — usado com mlflow.anthropic.autolog()
+anthropic==0.69.0
+# OpenAI — usado com mlflow.openai.autolog()
+openai==1.59.6

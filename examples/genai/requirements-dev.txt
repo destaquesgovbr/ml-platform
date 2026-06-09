@@ -1,0 +1,4 @@
+-r requirements.txt
+# Dependências de desenvolvimento/teste. Os testes são OFFLINE e DETERMINÍSTICOS:
+# não exigem chave de API nem rede, e não instalam providers reais.
+pytest==8.3.4

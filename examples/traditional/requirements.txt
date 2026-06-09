@@ -1,0 +1,6 @@
+# Dependências do exemplo tradicional (caminho runnable: sklearn).
+# Versões pinadas para reprodutibilidade.
+mlflow==2.18.0
+scikit-learn==1.5.2
+pandas==2.2.3
+numpy==1.26.4

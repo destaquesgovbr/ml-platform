@@ -1,0 +1,4 @@
+# Dependências do exemplo de GenAI (sumarização/classificação de notícias gov.br)
+# Versões pinadas para builds reprodutíveis.
+mlflow==3.13.0
+pandas==2.2.3

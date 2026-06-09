@@ -1,0 +1,15 @@
+# Servidor de tracking do MLflow (Cloud Run, atrás do IAP).
+# Versões pinadas para builds reproduzíveis.
+
+# MLflow com extras (inclui dependências de backend/registry usadas pelo server).
+mlflow[extras]==2.22.5
+
+# Driver Postgres para o backend store no Cloud SQL.
+psycopg2-binary==2.9.12
+
+# Acesso a GCS para o artifact store (default-artifact-root = gs://...).
+google-cloud-storage==3.11.0
+
+# Servidor WSGI usado pelo `mlflow server --gunicorn-opts`.
+# mlflow 2.22.x exige gunicorn<24; 23.0.0 é o mais novo compatível.
+gunicorn==23.0.0
