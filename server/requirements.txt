@@ -2,7 +2,7 @@
 # Versões pinadas para builds reproduzíveis.
 
 # MLflow com extras (inclui dependências de backend/registry usadas pelo server).
-mlflow[extras]==2.22.5
+mlflow[extras]==3.13.0
 
 # Driver Postgres para o backend store no Cloud SQL.
 psycopg2-binary==2.9.12
@@ -11,5 +11,5 @@ psycopg2-binary==2.9.12
 google-cloud-storage==3.11.0
 
 # Servidor WSGI usado pelo `mlflow server --gunicorn-opts`.
-# mlflow 2.22.x exige gunicorn<24; 23.0.0 é o mais novo compatível.
+# 23.0.0 instala sem conflito com mlflow[extras]==3.13.0.
 gunicorn==23.0.0

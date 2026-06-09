@@ -21,7 +21,7 @@ em **Cloud SQL Postgres** e artefatos em **GCS** (acesso direto pelos clientes).
 
 Exemplos executáveis acompanham os tutoriais:
 - [`../examples/traditional/`](../examples/traditional/) — ML tradicional (sklearn/BERT) com autolog + Model Registry.
-- [`../examples/genai/`](../examples/genai/) — GenAI (tracing, `mlflow.evaluate`, prompt registry).
+- [`../examples/genai/`](../examples/genai/) — GenAI (tracing, `mlflow.models.evaluate`, prompt registry).
 
 A biblioteca cliente que esconde a complexidade do IAP vive em [`../client/`](../client/) (`dgb-mlflow`).
 

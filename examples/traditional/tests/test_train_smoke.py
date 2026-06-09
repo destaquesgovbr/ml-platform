@@ -23,6 +23,9 @@ def test_train_logs_run_with_params_metrics_and_model(tmp_path):
 
     # O treino devolve identificadores e métricas
     assert "run_id" in result
+    # MLflow 3.x: o modelo logado é de primeira classe (tem model_id/model_uri).
+    assert "model_id" in result
+    assert "model_uri" in result
     assert result["accuracy"] >= 0.0
     assert result["f1_macro"] >= 0.0
 
@@ -43,13 +46,16 @@ def test_train_logs_run_with_params_metrics_and_model(tmp_path):
     assert "f1_macro" in metrics
     assert 0.0 <= metrics["accuracy"] <= 1.0
 
-    # Artefato do modelo foi logado em "model/"
-    artifacts = [a.path for a in client.list_artifacts(run.info.run_id)]
-    assert "model" in artifacts
+    # MLflow 3.x: o modelo é um "logged model" de primeira classe (não mais um
+    # artefato em runs:/<run>/model). Deve aparecer com nome lógico "model".
+    logged_models = mlflow.search_logged_models(
+        experiment_ids=[run.info.experiment_id], output_format="list"
+    )
+    names = {lm.name for lm in logged_models}
+    assert "model" in names
 
-    # O modelo é recarregável e prediz
-    model_uri = f"runs:/{result['run_id']}/model"
-    loaded = mlflow.sklearn.load_model(model_uri)
+    # O modelo é recarregável (pelo model_uri devolvido) e prediz
+    loaded = mlflow.sklearn.load_model(result["model_uri"])
     preds = loaded.predict(["o ministério anunciou novas medidas econômicas"])
     assert len(preds) == 1
 
