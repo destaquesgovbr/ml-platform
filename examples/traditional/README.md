@@ -62,15 +62,18 @@ mlflow ui --backend-store-uri sqlite:///mlflow.db
 
 ### Contra o servidor DGB (atrás do IAP)
 
-A lib `dgb_mlflow` configura o cliente (token OIDC para o IAP + ADC para o GCS).
+A lib `dgb_mlflow` configura o cliente (JWT do IAP via `signJwt` + ADC para o GCS).
+**Instale-a** — ela traz o `google-cloud-storage`, necessário para o MLflow gravar os
+artefatos (modelo) direto no GCS (sem ele, `log_model` falha com `No module named 'google.cloud'`):
 
 ```bash
-# credencial p/ artefatos no GCS (desktop):
-gcloud auth application-default login
+pip install -e ../../client                      # dgb-mlflow (+ google-cloud-storage, google-auth)
+gcloud auth application-default login            # credencial p/ artefatos no GCS (desktop)
+export DGB_MLFLOW_TRACKING_URI="https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app"
 
 python - <<'PY'
 import dgb_mlflow
-dgb_mlflow.configure()          # define MLFLOW_TRACKING_URI + auth do IAP
+dgb_mlflow.configure()          # aponta para o servidor + auth do IAP
 from news_clf.train import train
 print(train(register=True))     # registra a versão no Model Registry
 PY

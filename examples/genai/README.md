@@ -64,6 +64,22 @@ traces = mlflow.search_traces()
 print(traces[["trace_id", "request", "response"]])
 ```
 
+> **Nota (MLflow 3.x):** o envio de traces é **assíncrono** e só faz flush ao fim do
+> processo. Em scripts curtos, chame `mlflow.flush_trace_async_logging()` antes de
+> `search_traces()`, senão os traces recém-criados podem ainda não aparecer.
+
+### Contra o servidor DGB (atrás do IAP)
+
+Para logar no servidor remoto (em vez do SQLite local), instale a `dgb-mlflow` (traz o
+`google-cloud-storage` para artefatos no GCS) e use `configure()`:
+
+```bash
+pip install -e ../../client                      # dgb-mlflow (+ google-cloud-storage, google-auth)
+gcloud auth application-default login            # desktop
+export DGB_MLFLOW_TRACKING_URI="https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app"
+python -c "import dgb_mlflow; dgb_mlflow.configure()"  # antes de importar/usar o pipeline
+```
+
 ## Avaliação (`mlflow.models.evaluate`)
 
 `eval.run_evaluation()` monta um pequeno dataset de notícias e roda `mlflow.models.evaluate`
