@@ -12,7 +12,6 @@ def _clean_env(monkeypatch):
     """Garante ambiente limpo das vars do pacote em cada teste."""
     for var in (
         config.ENV_TRACKING_URI,
-        config.ENV_IAP_CLIENT_ID,
         config.ENV_CLIENT_SA,
         config.ENV_TRACKING_TOKEN,
     ):
@@ -41,18 +40,7 @@ def test_tracking_uri_string_vazia_e_tratada_como_ausente(monkeypatch):
     assert config.resolve_tracking_uri("") == config.LOCAL_TRACKING_URI
 
 
-# --- client id ------------------------------------------------------------
-
-def test_client_id_none_quando_sem_env():
-    assert config.resolve_iap_client_id() is None
-
-
-def test_client_id_lido_do_env(monkeypatch):
-    monkeypatch.setenv(config.ENV_IAP_CLIENT_ID, "123-abc.apps.googleusercontent.com")
-    assert config.resolve_iap_client_id() == "123-abc.apps.googleusercontent.com"
-
-
-# --- client SA ------------------------------------------------------------
+# --- client SA: env > default ---------------------------------------------
 
 def test_client_sa_default_quando_sem_env():
     assert config.resolve_client_sa() == config.DEFAULT_CLIENT_SA
@@ -62,6 +50,22 @@ def test_client_sa_default_quando_sem_env():
 def test_client_sa_lido_do_env(monkeypatch):
     monkeypatch.setenv(config.ENV_CLIENT_SA, "outra-sa@projeto.iam.gserviceaccount.com")
     assert config.resolve_client_sa() == "outra-sa@projeto.iam.gserviceaccount.com"
+
+
+# --- audience: URL + "/*" -------------------------------------------------
+
+def test_audience_adiciona_estrela():
+    uri = "https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app"
+    assert config.resolve_audience(uri) == uri + "/*"
+
+
+def test_audience_normaliza_barra_final():
+    uri = "https://mlflow.dgb.gov.br/"
+    assert config.resolve_audience(uri) == "https://mlflow.dgb.gov.br/*"
+
+
+def test_audience_normaliza_multiplas_barras_finais():
+    assert config.resolve_audience("https://x.run.app///") == "https://x.run.app/*"
 
 
 # --- detecção de modo -----------------------------------------------------
@@ -79,9 +83,8 @@ def test_is_remote_uri(uri, esperado):
     assert config.is_remote_uri(uri) is esperado
 
 
-def test_is_iap_mode_precisa_de_remoto_e_client_id():
-    assert config.is_iap_mode("https://mlflow.dgb.gov.br", "cid") is True
-    # remoto sem client id -> não é IAP
-    assert config.is_iap_mode("https://mlflow.dgb.gov.br", None) is False
-    # local com client id -> não é IAP
-    assert config.is_iap_mode("sqlite:///mlflow.db", "cid") is False
+def test_is_iap_mode_so_depende_de_remoto():
+    assert config.is_iap_mode("https://mlflow.dgb.gov.br") is True
+    assert config.is_iap_mode("http://localhost:5000") is True
+    assert config.is_iap_mode("sqlite:///mlflow.db") is False
+    assert config.is_iap_mode("./mlruns") is False

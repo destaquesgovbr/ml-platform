@@ -7,91 +7,106 @@ a **debugar** erros de acesso (a maioria cai em "token errado" ou "credencial do
 
 O servidor MLflow **não tem login próprio**. Quem fica na frente é o **IAP**
 (Identity-Aware Proxy), habilitado **direto no serviço do Cloud Run** (recurso GA — sem load
-balancer, sem custo extra). Toda requisição para a `<MLFLOW_URL>` passa antes pelo IAP, que:
+balancer, sem custo extra). Toda requisição para a `https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app` passa antes pelo IAP, que:
 
-1. exige uma **identidade Google** válida (login no browser **ou** ID token OIDC em chamadas programáticas);
+1. exige uma **identidade Google** válida (login no browser **ou** JWT assinado em chamadas programáticas);
 2. confere se essa identidade tem `roles/iap.httpsResourceAccessor` no recurso (i.e., está em `mlflow_users`);
 3. só então encaminha a request para o container (com `roles/run.invoker` concedido ao service agent do IAP).
 
 ```
   Cliente / Browser
-        │  Authorization: Bearer <ID token>   (ou cookie de sessão, no browser)
+        │  Authorization: Bearer <JWT da SA>   (ou cookie de sessão, no browser)
         ▼
-   ┌─────────┐   aud == <IAP_CLIENT_ID>?   identidade ∈ mlflow_users?
-   │   IAP   │ ─── não ──►  403
+   ┌─────────┐   aud == <URL do serviço>/* ?    identidade ∈ mlflow_users?
+   │   IAP   │ ─── não ──►  401 (aud errada) / 403 (sem acesso)
    └────┬────┘
         │ sim (run.invoker)
         ▼
    Cloud Run: mlflow server (sem auth nativa)
 ```
 
-## O ID token (a parte que confunde)
+## O JWT auto-assinado (a parte que confunde)
 
-Para chamadas **programáticas** (cliente Python, `curl`), o IAP espera um **ID token OIDC** no
-header HTTP:
+Para chamadas **programáticas** (cliente Python, `curl`), o IAP espera um **JWT** assinado por
+uma service account, no header HTTP:
 
 ```
 Authorization: Bearer eyJhbGciOiJSUzI1NiIs...
 ```
 
-O detalhe crítico: o token precisa ter `aud` (audience) **igual ao `<IAP_CLIENT_ID>`**. Um token
-com a audience errada é rejeitado com **403**, mesmo que a identidade tenha acesso.
+Por que **não** um ID token OIDC com `aud = <IAP client id>`? Porque o IAP do Cloud Run (GA)
+usa o **OAuth client gerenciado pelo Google** — não existe um OAuth client id próprio para você
+mintar um ID token. Tentar esse caminho (`fetch_id_token`, `IDTokenCredentials` com
+`target_audience = client_id`) é **bloqueado**, com **401 `Invalid JWT audience`**.
 
-- **Na VM**: o token vem do **metadata server**:
-  `google.oauth2.id_token.fetch_id_token(Request(), "<IAP_CLIENT_ID>")`.
-- **No PC**: credenciais de usuário não emitem ID token com audience customizada → o `dgb-mlflow`
-  **impersona** a SA `destaquesgovbr-mlflow-client` e pede a ela um ID token com
-  `target_audience=<IAP_CLIENT_ID>` (`include_email=True`). Requer
-  `roles/iam.serviceAccountTokenCreator` na client SA.
+O fluxo correto, validado em produção, é um **JWT auto-assinado** pela service account cliente
+(`destaquesgovbr-mlflow-client`) via a API **IAM Credentials `signJwt`**. O detalhe crítico é a
+**audience**: ela precisa ser **a URL do serviço com o sufixo `/*`**, por exemplo
+`https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app/*`. A URL **pura** (sem `/*`) é rejeitada.
+Os claims do JWT são:
 
-### Token sempre fresco (não use só `MLFLOW_TRACKING_TOKEN`)
-
-ID tokens expiram em ~1h. Se você fixar um token via `MLFLOW_TRACKING_TOKEN`, depois de uma hora
-as chamadas começam a dar 403. Por isso o `dgb-mlflow` registra um **request header provider**
-que **regenera o token a cada request**. Você não precisa pensar nisso — `configure()` já cuida.
-
-O `MLFLOW_TRACKING_TOKEN` existe como **override manual** para debug ou casos especiais:
-
-```bash
-export MLFLOW_TRACKING_TOKEN="$(gcloud auth print-identity-token \
-  --impersonate-service-account=destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com \
-  --audiences=<IAP_CLIENT_ID>)"
+```json
+{
+  "iss":   "destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com",
+  "sub":   "destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com",
+  "email": "destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com",
+  "aud":   "https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app/*",
+  "iat":   <agora>,
+  "exp":   <agora + 3600>
+}
 ```
 
-Se setado, ele tem precedência; lembre que **vai expirar** em ~1h.
+- **No PC**: o `dgb-mlflow` usa o **seu ADC de usuário** para chamar `signJwt` na SA cliente.
+  Requer `roles/iam.serviceAccountTokenCreator` na `destaquesgovbr-mlflow-client`.
+- **Na VM**: o `dgb-mlflow` usa o **ADC do metadata server** (a SA da VM) para chamar `signJwt`
+  na **mesma** SA cliente. A SA da VM também tem `tokenCreator` nela — mesmo fluxo, sem login.
+
+### Como a `dgb-mlflow` injeta o header
+
+A lib registra um `RequestHeaderProvider` via entry point `mlflow.request_header_provider`. O
+MLflow consulta esse provider em **toda** requisição ao tracking server; quando `configure()`
+ativou o modo IAP, ele monta `{"Authorization": "Bearer <JWT>"}` chamando
+`get_iap_jwt(audience, signer_sa)` — que assina um JWT **fresco** a cada request. Você não fixa
+nem renova nada manualmente.
+
+### `MLFLOW_TRACKING_TOKEN` (override manual)
+
+JWTs expiram em ~1h. Por isso o provider regenera o token a cada request. O `MLFLOW_TRACKING_TOKEN`
+existe só como **override manual** (debug/CI): se setado, tem precedência sobre o `signJwt`, e
+**vai expirar** em ~1h.
 
 ## Gerar um token manualmente (para debug)
 
-Útil para testar o `/health` com `curl` e isolar "o IAP está deixando passar?" do resto.
-
-**No PC (impersonando a client SA):**
-
-```bash
-TOKEN="$(gcloud auth print-identity-token \
-  --impersonate-service-account=destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com \
-  --audiences=<IAP_CLIENT_ID>)"
-```
-
-**Na VM (identidade da SA da VM):**
+Útil para testar o `/health` com `curl` e isolar "o IAP está deixando passar?" do resto. Use o
+`gcloud iam service-accounts sign-jwt`, montando os claims com a audience `<URL>/*`:
 
 ```bash
-TOKEN="$(gcloud auth print-identity-token --audiences=<IAP_CLIENT_ID>)"
+SA=destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com
+U=https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app
+NOW=$(date +%s)
+printf '{"iss":"%s","sub":"%s","email":"%s","aud":"%s/*","iat":%s,"exp":%s}' \
+  "$SA" "$SA" "$SA" "$U" "$NOW" $((NOW+3600)) > /tmp/c.json
+
+JWT=$(gcloud iam service-accounts sign-jwt /tmp/c.json /dev/stdout --iam-account="$SA")
 ```
+
+Funciona tanto no PC (seu usuário com `tokenCreator` na SA) quanto na VM (a SA da VM com
+`tokenCreator` na SA cliente).
 
 **Testar o endpoint de saúde:**
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" \
-  -H "Authorization: Bearer ${TOKEN}" \
-  "<MLFLOW_URL>/health"
+  -H "Authorization: Bearer ${JWT}" \
+  "$U/health"
 # espere: 200
 ```
 
 E confirme que **sem token** o IAP bloqueia:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" "<MLFLOW_URL>/health"
-# espere: 302 (redireciona p/ login) ou 403 — ou seja, o IAP está protegendo
+curl -s -o /dev/null -w "%{http_code}\n" "$U/health"
+# espere: 302 (redireciona p/ login) ou 401/403 — ou seja, o IAP está protegendo
 ```
 
 > O `curl` serve para validar o **caminho do IAP/metadados**. Ele **não** exercita o caminho de
@@ -103,8 +118,9 @@ curl -s -o /dev/null -w "%{http_code}\n" "<MLFLOW_URL>/health"
 Se desconfiar da audience, decodifique o payload do JWT (apenas debug — não valida assinatura):
 
 ```bash
-echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | python -m json.tool
-# confira:  "aud": "<IAP_CLIENT_ID>"   e   "email": "<sua conta ou a client SA>"
+echo "$JWT" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | python -m json.tool
+# confira:  "aud": "https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app/*"
+#           "email": "destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com"
 ```
 
 ## 403 do IAP × 401/403 do GCS — como distinguir
@@ -113,7 +129,7 @@ São **duas portas diferentes**. Saber qual falhou economiza muito tempo.
 
 | Sintoma | Origem | Causa provável | Onde olhar |
 |---------|--------|----------------|------------|
-| 403 em chamadas de **metadados** (criar experimento, log_param, registry) | **IAP** | token ausente/expirado, `aud` errada, identidade fora de `mlflow_users`, sem `serviceAccountTokenCreator` (PC) | [Troubleshooting → 403 do IAP](06-troubleshooting.md#403-do-iap) |
+| 401/403 em chamadas de **metadados** (criar experimento, log_param, registry) | **IAP** | `aud` errada (deve ser `<URL>/*`) → **401**; identidade fora de `mlflow_users` ou sem `tokenCreator` na client SA → **403** | [Troubleshooting → 401/403 do IAP](06-troubleshooting.md#401403-do-iap) |
 | Erro ao **subir/baixar artefato** (`403`, `Forbidden`, `Anonymous caller`, `DefaultCredentialsError`) | **GCS** | ADC ausente, sem `storage.objectUser` no bucket | [Troubleshooting → erros do GCS](06-troubleshooting.md#credenciais-do-gcs-ausentes-ou-insuficientes) |
 | **302/login no browser** | IAP | sessão não autenticada | faça login com a conta em `mlflow_users` |
 

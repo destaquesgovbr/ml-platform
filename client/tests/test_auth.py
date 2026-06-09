@@ -1,12 +1,15 @@
-"""Testes da obtenção do ID token do IAP (todas as chamadas google mockadas)."""
+"""Testes da obtenção do JWT do IAP (chamada signJwt mockada, sem rede)."""
 
 from __future__ import annotations
+
+import json
 
 import pytest
 
 from dgb_mlflow import auth, config
 
-CLIENT_ID = "client-id.apps.googleusercontent.com"
+AUDIENCE = "https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app/*"
+SIGNER_SA = config.DEFAULT_CLIENT_SA
 
 
 @pytest.fixture(autouse=True)
@@ -20,102 +23,72 @@ def _clean_env(monkeypatch):
 def test_override_via_mlflow_tracking_token(monkeypatch):
     monkeypatch.setenv(config.ENV_TRACKING_TOKEN, "token-manual")
 
-    # Se o override funcionar, nenhuma chamada google deve ocorrer.
+    # Se o override funcionar, signJwt não deve ser chamado.
     def _boom(*a, **k):  # pragma: no cover - não deve ser chamado
-        raise AssertionError("não deveria tocar o google quando há override")
+        raise AssertionError("não deveria assinar JWT quando há override")
 
-    monkeypatch.setattr(auth, "_fetch_id_token_via_metadata", _boom)
-    monkeypatch.setattr(auth, "_fetch_id_token_via_impersonation", _boom)
+    monkeypatch.setattr(auth, "_sign_jwt", _boom)
 
-    assert auth.get_iap_token(CLIENT_ID) == "token-manual"
+    assert auth.get_iap_jwt(AUDIENCE, SIGNER_SA) == "token-manual"
 
 
 def test_override_vazio_e_ignorado(monkeypatch):
     monkeypatch.setenv(config.ENV_TRACKING_TOKEN, "   ")
-    monkeypatch.setattr(
-        auth, "_fetch_id_token_via_metadata", lambda cid: "token-metadata"
-    )
-    assert auth.get_iap_token(CLIENT_ID) == "token-metadata"
+    monkeypatch.setattr(auth, "_sign_jwt", lambda sa, payload: "jwt-assinado")
+    assert auth.get_iap_jwt(AUDIENCE, SIGNER_SA) == "jwt-assinado"
 
 
-# --- (2) metadata server (VM/SA) ------------------------------------------
+# --- (2) JWT auto-assinado via signJwt ------------------------------------
 
-def test_token_via_metadata(monkeypatch):
-    chamado = {}
-
-    def _meta(cid):
-        chamado["cid"] = cid
-        return "token-metadata"
-
-    monkeypatch.setattr(auth, "_fetch_id_token_via_metadata", _meta)
-    monkeypatch.setattr(
-        auth,
-        "_fetch_id_token_via_impersonation",
-        lambda cid, sa: (_ for _ in ()).throw(AssertionError("não deveria impersonar")),
-    )
-
-    assert auth.get_iap_token(CLIENT_ID) == "token-metadata"
-    assert chamado["cid"] == CLIENT_ID
-
-
-# --- (3) fallback para impersonação ---------------------------------------
-
-def test_fallback_impersonacao_quando_metadata_falha(monkeypatch):
-    def _meta_falha(cid):
-        raise RuntimeError("sem metadata server (desktop)")
-
+def test_get_iap_jwt_assina_com_payload_correto(monkeypatch):
     capturado = {}
 
-    def _imp(cid, sa):
-        capturado["cid"] = cid
+    def _sign(sa, payload_json):
         capturado["sa"] = sa
-        return "token-impersonado"
+        capturado["payload"] = json.loads(payload_json)
+        return "jwt-assinado"
 
-    monkeypatch.setattr(auth, "_fetch_id_token_via_metadata", _meta_falha)
-    monkeypatch.setattr(auth, "_fetch_id_token_via_impersonation", _imp)
+    monkeypatch.setattr(auth, "_sign_jwt", _sign)
 
-    assert auth.get_iap_token(CLIENT_ID) == "token-impersonado"
-    assert capturado["cid"] == CLIENT_ID
-    assert capturado["sa"] == config.DEFAULT_CLIENT_SA
+    assert auth.get_iap_jwt(AUDIENCE, SIGNER_SA) == "jwt-assinado"
+
+    assert capturado["sa"] == SIGNER_SA
+    payload = capturado["payload"]
+    assert payload["iss"] == SIGNER_SA
+    assert payload["sub"] == SIGNER_SA
+    assert payload["email"] == SIGNER_SA
+    assert payload["aud"] == AUDIENCE
+    assert payload["exp"] - payload["iat"] == 3600
 
 
-def test_impersonacao_usa_sa_customizada(monkeypatch):
-    monkeypatch.setenv(config.ENV_CLIENT_SA, "custom@projeto.iam.gserviceaccount.com")
-    monkeypatch.setattr(
-        auth,
-        "_fetch_id_token_via_metadata",
-        lambda cid: (_ for _ in ()).throw(RuntimeError("falhou")),
-    )
-
+def test_get_iap_jwt_usa_sa_customizada(monkeypatch):
+    custom_sa = "custom@projeto.iam.gserviceaccount.com"
     capturado = {}
 
-    def _imp(cid, sa):
+    def _sign(sa, payload_json):
         capturado["sa"] = sa
-        return "token"
+        capturado["payload"] = json.loads(payload_json)
+        return "jwt"
 
-    monkeypatch.setattr(auth, "_fetch_id_token_via_impersonation", _imp)
+    monkeypatch.setattr(auth, "_sign_jwt", _sign)
 
-    auth.get_iap_token(CLIENT_ID)
-    assert capturado["sa"] == "custom@projeto.iam.gserviceaccount.com"
+    auth.get_iap_jwt(AUDIENCE, custom_sa)
+    assert capturado["sa"] == custom_sa
+    assert capturado["payload"]["iss"] == custom_sa
 
 
-# --- erro quando tudo falha -----------------------------------------------
+# --- erro quando a assinatura falha ---------------------------------------
 
-def test_erro_claro_quando_tudo_falha(monkeypatch):
-    monkeypatch.setattr(
-        auth,
-        "_fetch_id_token_via_metadata",
-        lambda cid: (_ for _ in ()).throw(RuntimeError("sem metadata")),
-    )
-    monkeypatch.setattr(
-        auth,
-        "_fetch_id_token_via_impersonation",
-        lambda cid, sa: (_ for _ in ()).throw(RuntimeError("sem permissão")),
-    )
+def test_erro_claro_quando_sign_jwt_falha(monkeypatch):
+    def _falha(sa, payload_json):
+        raise RuntimeError("sem permissão signJwt")
+
+    monkeypatch.setattr(auth, "_sign_jwt", _falha)
 
     with pytest.raises(RuntimeError) as exc:
-        auth.get_iap_token(CLIENT_ID)
+        auth.get_iap_jwt(AUDIENCE, SIGNER_SA)
 
     msg = str(exc.value)
     assert "IAP" in msg
-    assert config.DEFAULT_CLIENT_SA in msg
+    assert SIGNER_SA in msg
+    assert "serviceAccountTokenCreator" in msg

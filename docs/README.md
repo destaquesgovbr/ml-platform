@@ -25,30 +25,26 @@ Exemplos executáveis acompanham os tutoriais:
 
 A biblioteca cliente que esconde a complexidade do IAP vive em [`../client/`](../client/) (`dgb-mlflow`).
 
-## Placeholders que você vai precisar
+## Os valores que você vai precisar
 
-Dois valores aparecem em todos os tutoriais. Pegue-os uma vez e guarde no seu shell.
-
-| Placeholder | O que é | Como obter |
-|-------------|---------|------------|
-| `<MLFLOW_URL>` | URL `*.run.app` do serviço Cloud Run `destaquesgovbr-mlflow` | `gcloud run services describe destaquesgovbr-mlflow --project=inspire-7-finep --region=southamerica-east1 --format='value(status.url)'` |
-| `<IAP_CLIENT_ID>` | OAuth client ID do IAP (a *audience* do ID token) | Veja abaixo |
-
-### Obter o `<IAP_CLIENT_ID>`
-
-O IAP client ID é exposto como output do Terraform (no repo `infra/`):
+Toda a configuração se resume a **uma** variável de ambiente (mais o login do ADC). **Já está
+preenchida nos tutoriais com a URL real do ambiente DGB** — basta exportá-la uma vez no seu shell:
 
 ```bash
-# No repo infra/, na pasta terraform/
-terraform output -raw mlflow_iap_client_id
+export DGB_MLFLOW_TRACKING_URI="https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app"
+# no PC (desktop), autentique o ADC uma vez:
+gcloud auth application-default login
 ```
 
-Se você não tem acesso ao state do Terraform, peça o valor para quem administra a infra
-(ele também aparece no Console: **Security → Identity-Aware Proxy → seu serviço → OAuth client**).
-É uma string no formato `NNNNNNNNNNNN-xxxxxxxx.apps.googleusercontent.com`.
+| Variável | O que é | Como reconfirmar |
+|----------|---------|------------------|
+| `DGB_MLFLOW_TRACKING_URI` | URL `*.run.app` do serviço Cloud Run `destaquesgovbr-mlflow` | `gcloud run services describe destaquesgovbr-mlflow --project=inspire-7-finep --region=southamerica-east1 --format='value(status.url)'` |
+| `DGB_MLFLOW_CLIENT_SA` (opcional) | SA que assina o JWT do IAP via `signJwt` | default: `destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com` |
 
-> O `<IAP_CLIENT_ID>` **não é segredo** — é apenas o identificador do app OAuth (a *audience*).
-> O que protege o acesso é a sua identidade Google + a lista `mlflow_users` no IAP.
+> O acesso programático usa um **JWT auto-assinado** pela SA cliente (via `signJwt`), com audience
+> = `<TRACKING_URI>/*`. Você **não** precisa de nenhum IAP client id — a antiga
+> `DGB_MLFLOW_IAP_CLIENT_ID` foi **descontinuada**. O que protege o acesso é a sua identidade
+> Google + a lista `mlflow_users` no IAP, e o papel `tokenCreator` na SA cliente.
 
 ## Visão geral da arquitetura
 
@@ -56,8 +52,8 @@ O servidor MLflow **não tem autenticação nativa**. Quem protege a porta é o 
 Cloud Run (recurso GA, sem load balancer). Há **dois caminhos de acesso independentes**:
 
 1. **Metadados** (experimentos, params, métricas, registry) → vão para o servidor MLflow,
-   protegido pelo IAP. O cliente precisa mandar um **ID token OIDC** no header
-   `Authorization: Bearer <token>`, com `aud = <IAP_CLIENT_ID>`.
+   protegido pelo IAP. O cliente manda um **JWT auto-assinado** pela SA cliente (via `signJwt`) no
+   header `Authorization: Bearer <JWT>`, com `aud = <TRACKING_URI>/*`.
 2. **Artefatos** (modelos, arquivos, imagens) → o cliente **lê e grava direto no GCS**
    (`gs://inspire-7-finep-mlflow-artifacts`) usando ADC (Application Default Credentials).
    O servidor **não** faz proxy de artefatos (sem `--serve-artifacts`).
@@ -67,11 +63,11 @@ Cloud Run (recurso GA, sem load balancer). Há **dois caminhos de acesso indepen
         ┌───────────────────┴───────────────────────┐
         │                                            │
   (1) METADADOS                                (2) ARTEFATOS
-  Authorization: Bearer <ID token>             ADC (google-cloud-storage)
-  aud = <IAP_CLIENT_ID>                        leitura/escrita DIRETA
-        │                                            │
+  Authorization: Bearer <JWT da SA>            ADC (google-cloud-storage)
+  aud = <TRACKING_URI>/*                       leitura/escrita DIRETA
+        │  (assinado via signJwt)                    │
         ▼                                            │
-  ┌───────────┐  valida ID token / login Google      │
+  ┌───────────┐  valida JWT / login Google           │
   │    IAP    │  (membros em mlflow_users)            │
   └─────┬─────┘                                       │
         │ run.invoker                                 │
@@ -98,7 +94,8 @@ Consequências práticas (importantes para entender os erros):
 - Para a **UI no browser** você precisa estar na lista `mlflow_users` (role `iap.httpsResourceAccessor`).
   É um login Google normal.
 - Para o **cliente Python** você precisa de **duas coisas ao mesmo tempo**:
-  - acesso ao IAP (token válido) → senão dá **403 do IAP** nas chamadas de metadados;
+  - ADC autenticado + `tokenCreator` na SA cliente (para assinar o JWT) + estar em `mlflow_users` →
+    senão dá **401/403 do IAP** nas chamadas de metadados;
   - ADC com permissão no bucket → senão dá **erro do GCS** ao subir/baixar artefatos.
 - Um pode funcionar sem o outro: você pode logar params/métricas (metadados OK) mas falhar ao
   subir o artefato (GCS faltando), e vice-versa. Veja [Troubleshooting](06-troubleshooting.md).
@@ -114,5 +111,6 @@ mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./
 #   import mlflow; mlflow.set_tracking_uri("sqlite:///mlflow.db")
 ```
 
-O `dgb_mlflow.configure()` detecta a ausência do `<IAP_CLIENT_ID>` e cai para tracking local,
-facilitando o ciclo de desenvolvimento. Detalhes em [Troubleshooting](06-troubleshooting.md#dev-local-com-sqlite).
+O `dgb_mlflow.configure()` ativa o modo remoto-IAP só quando `DGB_MLFLOW_TRACKING_URI` é
+`http(s)://`; sem essa variável, ele cai para tracking local (`sqlite:///mlflow.db`), facilitando
+o ciclo de desenvolvimento. Detalhes em [Troubleshooting](06-troubleshooting.md#dev-local-com-sqlite).

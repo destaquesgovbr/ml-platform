@@ -7,10 +7,10 @@ direto). Identificar qual falhou resolve a maioria dos casos. Veja
 
 ## Índice rápido
 
-- [403 do IAP](#403-do-iap)
+- [401/403 do IAP](#401403-do-iap)
 - [Credenciais do GCS ausentes ou insuficientes](#credenciais-do-gcs-ausentes-ou-insuficientes)
 - [Token expirado](#token-expirado)
-- [Impersonation falha (serviceAccountTokenCreator)](#impersonation-falha-serviceaccounttokencreator)
+- [`signJwt` falha (serviceAccountTokenCreator)](#signjwt-falha-serviceaccounttokencreator)
 - [O artefato não sobe](#o-artefato-não-sobe)
 - [UI dá 403 no browser](#ui-dá-403-no-browser)
 - [`configure()` cai para local sem querer](#configure-cai-para-local-sem-querer)
@@ -18,37 +18,50 @@ direto). Identificar qual falhou resolve a maioria dos casos. Veja
 
 ---
 
-## 403 do IAP
+## 401/403 do IAP
 
 **Sintoma:** chamadas de **metadados** (criar experimento, `log_param`, `log_metric`, registry)
-falham com HTTP 403 (às vezes uma página HTML do Google "You don't have access").
+falham com HTTP **401** (`Invalid JWT audience`) ou **403** (às vezes uma página HTML do Google
+"You don't have access").
 
-**Causas e correções:**
+Lembre o fluxo correto (validado em produção): o acesso programático usa um **JWT auto-assinado**
+pela SA cliente `destaquesgovbr-mlflow-client` via `signJwt`, com **`aud = <URL do serviço>/*`**.
+**Não** existe ID token OIDC com `aud = <IAP client id>` — esse caminho é bloqueado (era o que a
+descontinuada `DGB_MLFLOW_IAP_CLIENT_ID` tentava fazer). Diagnostique pelo código HTTP:
 
-1. **Sua conta não está em `mlflow_users`.** Peça ao administrador da infra para incluir seu email.
-2. **Token com a audience errada.** O ID token precisa ter `aud = <IAP_CLIENT_ID>`. Confira se o
-   `DGB_MLFLOW_IAP_CLIENT_ID` está correto. Decodifique o token para conferir:
-   ```bash
-   echo "$MLFLOW_TRACKING_TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | python -m json.tool
-   # confira "aud" e "email"
-   ```
-3. **No PC: sem permissão de impersonation** — veja
-   [impersonation falha](#impersonation-falha-serviceaccounttokencreator).
-4. **Token expirado** se você fixou `MLFLOW_TRACKING_TOKEN` manualmente — veja
-   [token expirado](#token-expirado).
+**401 `Invalid JWT audience` → audience errada.** A `aud` do JWT **tem que ser** a URL do serviço
+com o sufixo `/*` (ex.: `https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app/*`). A URL pura
+(sem `/*`) ou um `aud = client id` dão 401. Decodifique o token para conferir:
+```bash
+echo "$JWT" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | python -m json.tool
+# "aud" deve ser "<URL do serviço>/*"
+```
+O `dgb_mlflow.configure()` já calcula a audience certa — se você está vendo 401, provavelmente
+fixou um `MLFLOW_TRACKING_TOKEN` manual com a audience errada (`unset` e deixe a lib gerenciar).
 
-**Teste isolado** (confirma se o IAP deixa passar, sem o resto do MLflow):
+**403 → falta de acesso.** Duas causas:
+1. **Sua conta (ou a SA da VM) não tem `roles/iap.httpsResourceAccessor`** no recurso IAP, i.e.,
+   não está em `mlflow_users`. Peça ao administrador da infra para incluir seu email.
+2. **Falta `roles/iam.serviceAccountTokenCreator` na client SA** → o `signJwt` falha antes mesmo
+   de chamar o IAP. Veja [`signJwt` falha](#signjwt-falha-serviceaccounttokencreator).
+
+**Teste isolado** (confirma se o IAP deixa passar, sem o resto do MLflow) — assina um JWT com a
+audience `<URL>/*` e bate no `/health`:
 
 ```bash
-# PC:
-TOKEN="$(gcloud auth print-identity-token \
-  --impersonate-service-account=destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com \
-  --audiences=<IAP_CLIENT_ID>)"
-# VM:  TOKEN="$(gcloud auth print-identity-token --audiences=<IAP_CLIENT_ID>)"
+SA=destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com
+U=https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app
+NOW=$(date +%s)
+printf '{"iss":"%s","sub":"%s","email":"%s","aud":"%s/*","iat":%s,"exp":%s}' \
+  "$SA" "$SA" "$SA" "$U" "$NOW" $((NOW+3600)) > /tmp/c.json
+JWT=$(gcloud iam service-accounts sign-jwt /tmp/c.json /dev/stdout --iam-account="$SA")
 
-curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer ${TOKEN}" "<MLFLOW_URL>/health"
-# 200 = IAP OK;  403 = problema de acesso/audience
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer ${JWT}" "$U/health"
+# 200 = IAP OK;  401 = audience errada;  403 = sem acesso (mlflow_users / tokenCreator)
 ```
+
+Funciona tanto no PC (seu usuário com `tokenCreator` na SA) quanto na VM (a SA da VM com
+`tokenCreator` na SA cliente).
 
 ## Credenciais do GCS ausentes ou insuficientes
 
@@ -77,38 +90,47 @@ GCS: `google.auth.exceptions.DefaultCredentialsError`, `403 Forbidden`, `Anonymo
 
 ## Token expirado
 
-**Sintoma:** funciona por ~1 hora e depois começa a dar 403 nos metadados.
+**Sintoma:** funciona por ~1 hora e depois começa a dar 401/403 nos metadados.
 
-**Causa:** você fixou um token estático via `MLFLOW_TRACKING_TOKEN`. ID tokens expiram em ~1h.
+**Causa:** você fixou um token estático via `MLFLOW_TRACKING_TOKEN`. O JWT expira em ~1h.
 
 **Correção:** **não** fixe o token manualmente. Use `dgb_mlflow.configure()`, que registra um
-provider que **regenera** o token a cada request. Se precisar do override só para debug pontual,
-relembre que ele expira:
+provider que **regenera** o token (assina um JWT fresco) a cada request. Se precisar do override
+só para debug pontual, relembre que ele expira:
 
 ```bash
 unset MLFLOW_TRACKING_TOKEN     # deixa o dgb-mlflow gerenciar o token (recomendado)
 ```
 
-## Impersonation falha (serviceAccountTokenCreator)
+## `signJwt` falha (serviceAccountTokenCreator)
 
-**Sintoma (PC):** ao chamar `configure()` ou gerar token manual, erro do IAM como
-`Permission 'iam.serviceAccounts.getOpenIdToken' denied on resource ...destaquesgovbr-mlflow-client...`
-ou `PermissionDenied: 403`.
+**Sintoma:** ao chamar `configure()` ou gerar o token manual, erro do IAM como
+`Permission 'iam.serviceAccounts.signJwt' denied on resource ...destaquesgovbr-mlflow-client...`
+ou `PermissionDenied: 403`. A própria `dgb-mlflow` reembrulha isso num `RuntimeError` pedindo
+`roles/iam.serviceAccountTokenCreator` + ADC.
 
-**Causa:** sua conta de usuário não tem `roles/iam.serviceAccountTokenCreator` na service account
-de cliente `destaquesgovbr-mlflow-client`, então não pode impersoná-la para gerar o ID token.
+**Causa:** a identidade que chama `signJwt` (sua conta de usuário no PC, ou a SA da VM) não tem
+`roles/iam.serviceAccountTokenCreator` na service account cliente `destaquesgovbr-mlflow-client`,
+então não pode assinar o JWT em nome dela.
 
 **Correção:** peça ao administrador da infra para conceder
-`roles/iam.serviceAccountTokenCreator` à sua conta na SA `destaquesgovbr-mlflow-client` (isso
-normalmente vem junto com a inclusão em `mlflow_users`). Confirme:
+`roles/iam.serviceAccountTokenCreator` à sua conta (PC) ou à SA da VM, na SA
+`destaquesgovbr-mlflow-client` (isso normalmente vem junto com a inclusão em `mlflow_users`).
+No PC, confirme também que o ADC está autenticado (`gcloud auth application-default login`).
+Confirme assinando um JWT de teste:
 
 ```bash
-gcloud auth print-identity-token \
-  --impersonate-service-account=destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com \
-  --audiences=<IAP_CLIENT_ID> >/dev/null && echo "impersonation OK"
+SA=destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com
+U=https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app
+NOW=$(date +%s)
+printf '{"iss":"%s","sub":"%s","email":"%s","aud":"%s/*","iat":%s,"exp":%s}' \
+  "$SA" "$SA" "$SA" "$U" "$NOW" $((NOW+3600)) > /tmp/c.json
+gcloud iam service-accounts sign-jwt /tmp/c.json /dev/stdout --iam-account="$SA" >/dev/null \
+  && echo "signJwt OK"
 ```
 
-> Na **VM** isso não se aplica — a VM usa o metadata server e não impersona ninguém.
+> O mesmo fluxo vale para o PC e a VM. A diferença é só quem é a identidade chamadora (seu usuário
+> vs a SA da VM); ambos precisam de `tokenCreator` na SA cliente.
 
 ## O artefato não sobe
 
@@ -128,7 +150,7 @@ gcloud auth print-identity-token \
 
 ## UI dá 403 no browser
 
-**Sintoma:** ao abrir `<MLFLOW_URL>` no navegador, aparece a tela do Google negando acesso.
+**Sintoma:** ao abrir `https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app` no navegador, aparece a tela do Google negando acesso.
 
 **Correção:** faça login com a conta que está em `mlflow_users` (papel
 `roles/iap.httpsResourceAccessor` no recurso do IAP). Se você tem várias contas Google logadas,
@@ -139,16 +161,16 @@ o navegador pode estar usando a errada — abra numa janela anônima e logue com
 **Sintoma:** você esperava falar com o servidor remoto, mas `mlflow.get_tracking_uri()` mostra um
 `sqlite:///...` ou `file:./mlruns` local.
 
-**Causa:** o `dgb_mlflow.configure()` detecta a **ausência** de `DGB_MLFLOW_IAP_CLIENT_ID` (ou de
-`DGB_MLFLOW_TRACKING_URI`) e cai para tracking local, para facilitar dev offline.
+**Causa:** o `dgb_mlflow.configure()` ativa o modo remoto-IAP só quando `DGB_MLFLOW_TRACKING_URI`
+aponta para `http(s)://`. Sem essa variável, ele cai para tracking local (`sqlite:///mlflow.db`),
+para facilitar dev offline.
 
-**Correção:** exporte as duas variáveis antes de configurar:
+**Correção:** exporte a variável antes de configurar:
 
 ```bash
-export DGB_MLFLOW_TRACKING_URI="<MLFLOW_URL>"
-export DGB_MLFLOW_IAP_CLIENT_ID="<IAP_CLIENT_ID>"
+export DGB_MLFLOW_TRACKING_URI="https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app"
 python -c "import dgb_mlflow, mlflow; dgb_mlflow.configure(); print(mlflow.get_tracking_uri())"
-# deve imprimir o <MLFLOW_URL>
+# deve imprimir o https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app
 ```
 
 ## Dev local com sqlite

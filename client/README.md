@@ -4,11 +4,16 @@ Biblioteca cliente que configura o MLflow do **Destaques Gov.BR** escondendo a
 complexidade do **IAP** (Identity-Aware Proxy) e do tracking remoto.
 
 O servidor de tracking roda em Cloud Run **sem auth nativa do MLflow**, protegido
-por IAP. A autenticação do cliente tem duas partes independentes:
+por **IAP direto (GA)**. Como o IAP usa o OAuth client **gerenciado pelo Google**,
+acesso programático por ID token OIDC (`aud` = client id) é **bloqueado** (401
+"Invalid JWT audience"). O fluxo que funciona é um **JWT auto-assinado** pela
+service account via a API IAM Credentials `signJwt`. A autenticação do cliente
+tem duas partes independentes:
 
 1. **Metadados** (experimentos, runs, métricas): header
-   `Authorization: Bearer <ID token OIDC>`, com `aud` = IAP OAuth client id.
-   Este pacote injeta esse header automaticamente.
+   `Authorization: Bearer <JWT>`, onde o JWT é assinado pela SA cliente (signJwt)
+   com `aud` = **URL do recurso + `/*`** (ex.: `https://...run.app/*`; a URL pura,
+   sem `/*`, dá 401). Este pacote injeta esse header automaticamente.
 2. **Artefatos** (modelos, plots, datasets): o cliente lê/grava **direto** no
    bucket GCS via `google-cloud-storage` + ADC. Não passa pelo servidor.
 
@@ -37,25 +42,24 @@ with mlflow.start_run():
 ### No PC (desktop)
 
 ```bash
-gcloud auth application-default login            # ADC p/ artefatos + impersonação
-export DGB_MLFLOW_TRACKING_URI="https://mlflow.dgb.gov.br"
-export DGB_MLFLOW_IAP_CLIENT_ID="<IAP OAuth client id>"
+gcloud auth application-default login            # ADC p/ artefatos + signJwt
+export DGB_MLFLOW_TRACKING_URI="https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app"
 ```
 
-Como a ADC do desktop é uma credencial de **usuário** (não cunha ID tokens
-diretamente), o pacote **impersona** a SA cliente
-`destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com` para gerar
-o ID token. Você precisa de `roles/iam.serviceAccountTokenCreator` nessa SA.
+O pacote usa a ADC para chamar `signJwt` na SA cliente
+`destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com`, que assina
+o JWT do IAP (audience = `<TRACKING_URI>/*`). Você precisa de
+`roles/iam.serviceAccountTokenCreator` nessa SA. **Não** é necessário nenhum IAP
+client id.
 
 ### Na VM / Cloud Run (Service Account)
 
 ```bash
-export DGB_MLFLOW_TRACKING_URI="https://mlflow.dgb.gov.br"
-export DGB_MLFLOW_IAP_CLIENT_ID="<IAP OAuth client id>"
+export DGB_MLFLOW_TRACKING_URI="https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app"
 ```
 
-Na VM/SA o ID token vem direto do **metadata server**
-(`fetch_id_token`) — sem impersonação. Os artefatos usam a SA da própria VM.
+Mesmo fluxo: a ADC da própria VM/SA chama `signJwt` (na SA cliente ou nela mesma,
+se configurada) para assinar o JWT. Os artefatos usam a SA da própria VM.
 
 ### Desenvolvimento local (offline, sem GCP)
 
@@ -76,21 +80,22 @@ mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./
 | Variável | Descrição | Default |
 |----------|-----------|---------|
 | `DGB_MLFLOW_TRACKING_URI` | URI do tracking server | `sqlite:///mlflow.db` (local) |
-| `DGB_MLFLOW_IAP_CLIENT_ID` | IAP OAuth client id (`aud` do ID token) | — (sem ele, sem auth IAP) |
-| `DGB_MLFLOW_CLIENT_SA` | SA cliente p/ impersonação (desktop) | `destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com` |
-| `MLFLOW_TRACKING_TOKEN` | Override manual do ID token (debug/CI) | — |
+| `DGB_MLFLOW_CLIENT_SA` | SA que assina o JWT do IAP (signJwt) | `destaquesgovbr-mlflow-client@inspire-7-finep.iam.gserviceaccount.com` |
+| `MLFLOW_TRACKING_TOKEN` | Override manual do JWT (debug/CI) | — |
 
-O modo **remoto-IAP** só é ativado quando a URI é `https://...` **e** há um
-`DGB_MLFLOW_IAP_CLIENT_ID`. Caso contrário, opera em **modo local**.
+O modo **remoto-IAP** é ativado sempre que a URI for `http://`/`https://`. Caso
+contrário, opera em **modo local**. (A antiga `DGB_MLFLOW_IAP_CLIENT_ID` foi
+**descontinuada** e é ignorada: o IAP do Cloud Run usa o OAuth client gerenciado
+pelo Google, então não há client id para acesso programático.)
 
 ## API
 
 - `dgb_mlflow.configure(tracking_uri: str | None = None) -> str`
   Resolve a URI (`arg > env > local`), ativa/desativa o provider de headers do
   IAP e chama `mlflow.set_tracking_uri`. Retorna a URI efetiva.
-- `dgb_mlflow.get_iap_token(client_id: str) -> str`
-  Retorna um ID token OIDC (`aud = client_id`). Ordem:
-  `MLFLOW_TRACKING_TOKEN` > metadata server (VM/SA) > impersonação (desktop).
+- `dgb_mlflow.get_iap_jwt(audience: str, signer_sa: str) -> str`
+  Retorna o JWT (Bearer) do IAP. Ordem: `MLFLOW_TRACKING_TOKEN` (override) > JWT
+  auto-assinado pela `signer_sa` via `signJwt` (`aud = audience`, a URL + `/*`).
 
 ## Como o header é injetado
 
@@ -107,6 +112,5 @@ pytest -q
 ruff check src tests
 ```
 
-Os testes rodam **offline**: todas as chamadas ao Google
-(`fetch_id_token` / impersonação) são mockadas e o tracking usa SQLite em
-`tmp_path`.
+Os testes rodam **offline**: a chamada ao Google (`signJwt`, isolada em
+`auth._sign_jwt`) é mockada e o tracking usa SQLite em `tmp_path`.

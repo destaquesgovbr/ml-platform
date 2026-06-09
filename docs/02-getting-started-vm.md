@@ -1,27 +1,27 @@
 # 02 — Getting Started na dev VM
 
 Se você trabalha numa **VM de desenvolvimento** do projeto (criada pelo `reusable-terraform`),
-a configuração é **mais simples** do que no PC: a service account da VM já é principal do IAP e
-já tem acesso ao bucket. Não há impersonation, não há `gcloud auth application-default login`.
+a configuração é **mais simples** do que no PC: a service account da VM já tem acesso ao bucket e
+já pode assinar o JWT do IAP. Não há `gcloud auth application-default login` — o ADC vem do
+metadata server.
 
 ## Por que é mais simples
 
 Na VM, o cliente roda como a **service account da VM**. A infra já concede a essa SA:
 
-- `roles/iap.httpsResourceAccessor` no recurso do IAP → ela pode chamar o servidor MLflow;
-- `roles/storage.objectUser` no bucket → ela pode ler/gravar artefatos no GCS.
+- `roles/storage.objectUser` no bucket → ela pode ler/gravar artefatos no GCS;
+- `roles/iam.serviceAccountTokenCreator` na SA cliente `destaquesgovbr-mlflow-client` → ela pode
+  chamar `signJwt` para assinar o JWT do IAP.
 
-Além disso, a VM tem um **metadata server** do GCP, que entrega tanto o ADC (para o GCS) quanto
-o **ID token OIDC** com a audience certa — **sem impersonation**. O `dgb-mlflow` detecta esse
-ambiente automaticamente.
+Além disso, a VM tem um **metadata server** do GCP, que entrega o ADC automaticamente (sem
+`application-default login`). O `dgb-mlflow` usa esse ADC para chamar `signJwt` na SA cliente — o
+**mesmo fluxo do PC**, só que sem o login interativo. O ambiente é detectado automaticamente.
 
 ```python
-# Na VM, internamente, o token vem direto do metadata server:
-import google.oauth2.id_token
-from google.auth.transport.requests import Request
-
-token = google.oauth2.id_token.fetch_id_token(Request(), "<IAP_CLIENT_ID>")
-# vai no header Authorization: Bearer <token>
+# Na VM, internamente, o JWT é auto-assinado via signJwt na SA cliente, usando o ADC do
+# metadata server. A audience é a URL do serviço + "/*" (igual ao PC).
+import dgb_mlflow
+dgb_mlflow.configure()        # o ADC da VM chama signJwt na destaquesgovbr-mlflow-client
 ```
 
 ## Passo 1 — Conferir as credenciais da VM
@@ -48,16 +48,16 @@ pip install -e /caminho/para/ml-platform/client       # path local do repo
 # (no futuro): pip install dgb-mlflow
 ```
 
-## Passo 3 — Variáveis de ambiente
+## Passo 3 — Variável de ambiente
 
-Iguais às do PC (veja [como obter](README.md#placeholders-que-você-vai-precisar)):
+Igual à do PC (veja [como obter](README.md#os-valores-que-você-vai-precisar)):
 
 ```bash
-export DGB_MLFLOW_TRACKING_URI="<MLFLOW_URL>"
-export DGB_MLFLOW_IAP_CLIENT_ID="<IAP_CLIENT_ID>"
+export DGB_MLFLOW_TRACKING_URI="https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app"
 ```
 
-> Dica: coloque essas linhas no `~/.bashrc` da VM para não repetir a cada sessão.
+> A antiga `DGB_MLFLOW_IAP_CLIENT_ID` não é mais necessária (descontinuada).
+> Dica: coloque essa linha no `~/.bashrc` da VM para não repetir a cada sessão.
 
 ## Passo 4 — Configurar e logar o primeiro run
 
@@ -65,7 +65,7 @@ A API é **idêntica** à do PC — `configure()` cuida da diferença de ambient
 
 ```python
 import dgb_mlflow
-dgb_mlflow.configure()          # detecta a VM e usa o metadata server (sem impersonation)
+dgb_mlflow.configure()          # na VM, o ADC vem do metadata server e assina o JWT via signJwt
 
 import mlflow
 
@@ -85,7 +85,7 @@ print("Run logado da VM!")
 ## E a UI?
 
 A UI roda no **browser**, com sua identidade **de usuário** (não a da VM). Então, para abrir a
-`<MLFLOW_URL>` no navegador você precisa estar em `mlflow_users` (mesma regra do PC). Tipicamente:
+`https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app` no navegador você precisa estar em `mlflow_users` (mesma regra do PC). Tipicamente:
 
 - da VM você **loga experimentos** (cliente Python, identidade = SA da VM);
 - do seu PC/navegador você **abre a UI** para visualizar (identidade = sua conta Google).
@@ -98,8 +98,8 @@ Os dois enxergam os mesmos experimentos, pois compartilham o mesmo backend.
 |---------|----|--------|
 | Identidade do cliente | sua conta (usuário) | SA da VM |
 | ADC | `gcloud auth application-default login` | metadata server (automático) |
-| ID token do IAP | impersonando `destaquesgovbr-mlflow-client` | metadata server direto |
-| `roles/iam.serviceAccountTokenCreator` | **necessário** | não necessário |
+| JWT do IAP | `signJwt` na `destaquesgovbr-mlflow-client` (aud = URL + `/*`) | `signJwt` na `destaquesgovbr-mlflow-client` (aud = URL + `/*`) |
+| `roles/iam.serviceAccountTokenCreator` na client SA | **na sua conta** | **na SA da VM** |
 | Acesso ao bucket | `storage.objectUser` na sua conta | `storage.objectUser` na SA da VM |
 | Código (`configure()` + `mlflow.*`) | **igual** | **igual** |
 

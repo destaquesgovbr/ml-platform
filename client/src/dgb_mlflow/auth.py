@@ -1,26 +1,34 @@
-"""Obtenção do ID token OIDC usado para autenticar no IAP.
+"""Obtenção do JWT usado para autenticar no IAP do Cloud Run.
 
-Ordem de resolução do token (ver :func:`get_iap_token`):
+O IAP do servidor MLflow usa o OAuth client **gerenciado pelo Google**, então
+acesso programático por ID token OIDC (``aud = client_id``) é bloqueado pelo IAP
+(401 "Invalid JWT audience"). O fluxo que funciona é um **JWT auto-assinado** pela
+service account via a API IAM Credentials ``signJwt``, cuja audience é a URL do
+recurso + ``/*``.
+
+Ordem de resolução (ver :func:`get_iap_jwt`):
 
 1. ``MLFLOW_TRACKING_TOKEN`` (override manual) — útil em CI ou debugging;
-2. ``google.oauth2.id_token.fetch_id_token`` — funciona em VM/Cloud Run/SA via
-   metadata server, retornando um ID token com a audiência = IAP client id;
-3. impersonação da SA cliente (``DGB_MLFLOW_CLIENT_SA``) via
-   ``impersonated_credentials.IDTokenCredentials`` — caminho do desktop, onde a
-   ADC é uma credencial de usuário e não consegue cunhar ID tokens diretamente.
+2. JWT assinado pela SA cliente (``DGB_MLFLOW_CLIENT_SA``) via ``signJwt``.
 
-As chamadas às libs do google ficam isoladas em funções pequenas para mockar nos
+A chamada às libs do google fica isolada em :func:`_sign_jwt` para mockar nos
 testes (offline, sem rede).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import time
 
 from . import config
 
 logger = logging.getLogger(__name__)
+
+_IAM_CREDENTIALS_ENDPOINT = (
+    "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{sa}:signJwt"
+)
 
 
 def _token_from_env() -> str | None:
@@ -31,73 +39,61 @@ def _token_from_env() -> str | None:
     return None
 
 
-def _fetch_id_token_via_metadata(client_id: str) -> str:
-    """ID token via metadata server (VM/Cloud Run/SA).
+def _sign_jwt(signer_sa: str, payload_json: str) -> str:
+    """Assina ``payload_json`` com a SA ``signer_sa`` via IAM Credentials signJwt.
 
-    Wrapper fino sobre ``google.oauth2.id_token.fetch_id_token`` para mockar.
+    Wrapper fino sobre a API do google (mockado nos testes). Usa a ADC corrente
+    (``google.auth.default``) para autenticar a chamada ao endpoint signJwt e
+    retorna o JWT assinado.
     """
-    from google.auth.transport.requests import Request
-    from google.oauth2 import id_token
-
-    return id_token.fetch_id_token(Request(), client_id)
-
-
-def _fetch_id_token_via_impersonation(client_id: str, client_sa: str) -> str:
-    """ID token impersonando a SA cliente (caminho desktop com ADC de usuário)."""
     import google.auth
-    from google.auth import impersonated_credentials
-    from google.auth.transport.requests import Request
+    from google.auth.transport.requests import AuthorizedSession
 
-    source_credentials, _ = google.auth.default()
-    id_creds = impersonated_credentials.IDTokenCredentials(
-        target_credentials=impersonated_credentials.Credentials(
-            source_credentials=source_credentials,
-            target_principal=client_sa,
-            target_scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        ),
-        target_audience=client_id,
-        include_email=True,
+    credentials, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
-    id_creds.refresh(Request())
-    return id_creds.token
+    session = AuthorizedSession(credentials)
+    resp = session.post(
+        _IAM_CREDENTIALS_ENDPOINT.format(sa=signer_sa),
+        data=json.dumps({"payload": payload_json}),
+    )
+    resp.raise_for_status()
+    return resp.json()["signedJwt"]
 
 
-def get_iap_token(client_id: str) -> str:
-    """Retorna um ID token OIDC com audiência = ``client_id`` (IAP OAuth client).
+def get_iap_jwt(audience: str, signer_sa: str) -> str:
+    """Retorna o JWT (Bearer) para autenticar no IAP do Cloud Run.
 
-    Tenta, em ordem: override de ambiente, metadata server e impersonação.
-    Levanta ``RuntimeError`` com mensagem clara se nenhum caminho funcionar.
+    Ordem: override de ambiente (``MLFLOW_TRACKING_TOKEN``) e, caso ausente, um
+    JWT auto-assinado pela SA ``signer_sa`` via signJwt, com ``aud = audience``
+    (a URL do recurso com sufixo ``/*``).
+
+    Levanta ``RuntimeError`` com mensagem clara se a assinatura falhar.
     """
     override = _token_from_env()
     if override:
-        logger.debug("Token do IAP via MLFLOW_TRACKING_TOKEN (override).")
+        logger.debug("JWT do IAP via MLFLOW_TRACKING_TOKEN (override).")
         return override
 
-    try:
-        token = _fetch_id_token_via_metadata(client_id)
-        if token:
-            logger.debug("Token do IAP via metadata server (VM/SA).")
-            return token
-    except Exception as exc:  # noqa: BLE001 - fallback intencional p/ impersonação
-        logger.debug("fetch_id_token (metadata) falhou: %s. Tentando impersonação.", exc)
+    now = int(time.time())
+    payload = {
+        "iss": signer_sa,
+        "sub": signer_sa,
+        "email": signer_sa,
+        "aud": audience,
+        "iat": now,
+        "exp": now + 3600,
+    }
 
-    client_sa = config.resolve_client_sa()
     try:
-        token = _fetch_id_token_via_impersonation(client_id, client_sa)
-        if token:
-            logger.debug("Token do IAP via impersonação de %s.", client_sa)
-            return token
-    except Exception as exc:  # noqa: BLE001
+        signed = _sign_jwt(signer_sa, json.dumps(payload))
+    except Exception as exc:  # noqa: BLE001 - reembrulha com dica acionável
         raise RuntimeError(
-            "Falha ao obter ID token do IAP. Tentativas: "
-            "(1) MLFLOW_TRACKING_TOKEN não setado; "
-            "(2) metadata server indisponível; "
-            f"(3) impersonação de '{client_sa}' falhou: {exc}. "
-            "No desktop, rode 'gcloud auth application-default login' e garanta a "
-            "permissão roles/iam.serviceAccountTokenCreator na SA cliente."
+            "Falha ao assinar o JWT do IAP via signJwt para a SA "
+            f"'{signer_sa}' (audience='{audience}'): {exc}. "
+            "Garanta a permissão roles/iam.serviceAccountTokenCreator nessa SA e, "
+            "no desktop, rode 'gcloud auth application-default login'."
         ) from exc
 
-    raise RuntimeError(
-        "Não foi possível obter um ID token do IAP (todas as estratégias "
-        "retornaram vazio)."
-    )
+    logger.debug("JWT do IAP assinado por %s (aud=%s).", signer_sa, audience)
+    return signed
