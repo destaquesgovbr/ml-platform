@@ -83,7 +83,7 @@ Cloud Run (recurso GA, sem load balancer). Há **dois caminhos de acesso indepen
   ┌────────────────────────┐          ┌──────────────────────────────────┐
   │ Cloud SQL Postgres     │          │ GCS                               │
   │ DB: mlflow             │          │ gs://inspire-7-finep-             │
-  │ IP público <IP da instância Cloud SQL>│          │      mlflow-artifacts             │
+  │ IP privado (via VPC)   │          │      mlflow-artifacts             │
   │ (experimentos, runs,   │          │ (modelos e arquivos;             │
   │  registry, métricas)   │          │  versionado + lifecycle)          │
   └────────────────────────┘          └──────────────────────────────────┘
