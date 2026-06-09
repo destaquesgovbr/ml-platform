@@ -1,0 +1,44 @@
+name: Tests
+
+# Roda os testes automatizados (offline: sqlite local + mocks; sem GCP) como
+# check obrigatório antes de mergear/buildar. Não inclui E2E contra produção.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    name: pytest (${{ matrix.project.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - name: client
+            dir: client
+            install: pip install -e ".[dev]"
+          - name: examples-traditional
+            dir: examples/traditional
+            install: pip install -r requirements-dev.txt
+          - name: examples-genai
+            dir: examples/genai
+            install: pip install -r requirements-dev.txt
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.project.dir }}
+        run: |
+          python -m pip install --upgrade pip
+          ${{ matrix.project.install }}
+
+      - name: Run tests
+        working-directory: ${{ matrix.project.dir }}
+        run: python -m pytest -q
