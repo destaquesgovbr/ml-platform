@@ -12,7 +12,7 @@ direto). Identificar qual falhou resolve a maioria dos casos. Veja
 - [Token expirado](#token-expirado)
 - [`signJwt` falha (serviceAccountTokenCreator)](#signjwt-falha-serviceaccounttokencreator)
 - [O artefato não sobe](#o-artefato-não-sobe)
-- [UI dá 403 no browser](#ui-dá-403-no-browser)
+- [UI dá "You don't have access" no browser (conta externa @gmail → proxy)](#ui-dá-you-dont-have-access-no-browser)
 - [`configure()` cai para local sem querer](#configure-cai-para-local-sem-querer)
 - [Dev local com sqlite](#dev-local-com-sqlite)
 
@@ -148,13 +148,35 @@ gcloud iam service-accounts sign-jwt /tmp/c.json /dev/stdout --iam-account="$SA"
 3. Lembre que o servidor roda **sem `--serve-artifacts`**: o upload é **direto** do seu cliente
    para o GCS. Se a sua rede bloqueia `storage.googleapis.com`, o upload falha mesmo com IAP OK.
 
-## UI dá 403 no browser
+## UI dá "You don't have access" no browser
 
-**Sintoma:** ao abrir `https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app` no navegador, aparece a tela do Google negando acesso.
+**Sintoma:** ao abrir `https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app` no navegador, o IAP
+mostra **"You don't have access"** com o seu email.
 
-**Correção:** faça login com a conta que está em `mlflow_users` (papel
-`roles/iap.httpsResourceAccessor` no recurso do IAP). Se você tem várias contas Google logadas,
-o navegador pode estar usando a errada — abra numa janela anônima e logue com a conta certa.
+**Caso 1 — múltiplas contas Google:** se você tem várias contas logadas, o navegador pode estar
+usando a errada. Abra numa **janela anônima** e logue com a conta que está em `mlflow_users`.
+
+**Caso 2 — conta externa à organização (ex.: `@gmail`):** o IAP-on-Cloud-Run (OAuth client
+gerenciado pelo Google, projeto na org cpqd.com.br) **aceita service accounts mas barra
+identidades externas no login de browser** — mesmo com o binding IAM correto e mesmo em janela
+anônima. Não é falta de permissão (o acesso *programático* pelo `dgb-mlflow` funciona, pois usa a SA).
+
+Solução: **proxy local que injeta o token da SA** (a SA é aceita pelo IAP). Você abre a UI em
+`localhost`:
+
+```bash
+cd ml-platform
+gcloud auth login            # sua conta (precisa de tokenCreator na client SA — já provisionado)
+python3 scripts/iap_ui_proxy.py
+# abre http://localhost:5000 no browser → UI do MLflow completa
+```
+
+O proxy ([`scripts/iap_ui_proxy.py`](../scripts/iap_ui_proxy.py)) é local e por-usuário; escuta só
+em `127.0.0.1` (não expõe nada). Variáveis opcionais: `DGB_MLFLOW_TRACKING_URI`, `IAP_PROXY_PORT`.
+
+> Alternativa definitiva (precisa de Console): em **APIs & Services → OAuth consent screen**,
+> publicar o app (*In Production*) ou adicionar os emails externos como *test users* — se resolver,
+> o login de browser passa a funcionar direto, sem proxy.
 
 ## `configure()` cai para local sem querer
 
