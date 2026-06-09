@@ -18,6 +18,11 @@ on:
       - ".github/workflows/package.yml"
   workflow_dispatch:
 
+# Necessário para o passo de release (softprops/action-gh-release) criar o
+# Release e anexar os artefatos. Sem isso: 403 "Resource not accessible".
+permissions:
+  contents: write
+
 jobs:
   build:
     name: build + smoke install
