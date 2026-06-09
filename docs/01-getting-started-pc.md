@@ -37,12 +37,12 @@ gcloud auth application-default set-quota-project inspire-7-finep
 
 ## Passo 2 — Instalar a biblioteca `dgb-mlflow`
 
-A lib cliente está em [`../client/`](../client/). Instale a partir do path local:
+A lib cliente está em [`../client/`](../client/) e instala-se direto do git:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate    # sempre use um venv
-pip install -e ../client            # a partir de ml-platform/docs; ajuste o path conforme seu cwd
-# (no futuro, quando publicada): pip install dgb-mlflow
+pip install "git+https://github.com/destaquesgovbr/ml-platform.git@main#subdirectory=client"
+# para desenvolvimento, de dentro do repo: pip install -e ../client (a partir de ml-platform/docs)
 ```
 
 A `dgb-mlflow` já traz o `mlflow` e o `google-cloud-storage` como dependências.

@@ -10,11 +10,26 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Destaques Gov.BR — Data Science" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
 dependencies = [
     "mlflow==3.13.0",
     "google-auth>=2.30,<3",
     "google-cloud-storage>=2.16,<3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/destaquesgovbr/ml-platform"
+Repository = "https://github.com/destaquesgovbr/ml-platform"
+Issues = "https://github.com/destaquesgovbr/ml-platform/issues"
 
 [project.optional-dependencies]
 dev = [

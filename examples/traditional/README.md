@@ -67,7 +67,9 @@ A lib `dgb_mlflow` configura o cliente (JWT do IAP via `signJwt` + ADC para o GC
 artefatos (modelo) direto no GCS (sem ele, `log_model` falha com `No module named 'google.cloud'`):
 
 ```bash
-pip install -e ../../client                      # dgb-mlflow (+ google-cloud-storage, google-auth)
+# git-install (traz google-cloud-storage + google-auth)
+pip install "git+https://github.com/destaquesgovbr/ml-platform.git@main#subdirectory=client"
+# de dentro do repo, `pip install -e ../../client` também funciona para dev
 gcloud auth application-default login            # credencial p/ artefatos no GCS (desktop)
 export DGB_MLFLOW_TRACKING_URI="https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app"
 
