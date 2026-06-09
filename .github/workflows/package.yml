@@ -6,10 +6,10 @@ name: Package — dgb-mlflow (build)
 #   pip install "git+https://github.com/destaquesgovbr/ml-platform.git@main#subdirectory=client"
 on:
   push:
+    # tags v* (release) NÃO podem coexistir com filtro de paths no mesmo push:
+    # o paths se aplicaria ao push de tag e bloquearia o release. Por isso o
+    # push aqui não usa paths (o build é barato); o filtro fica só no PR.
     branches: [main]
-    paths:
-      - "client/**"
-      - ".github/workflows/package.yml"
     tags:
       - "v*"
   pull_request:
