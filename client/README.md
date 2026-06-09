@@ -20,8 +20,12 @@ tem duas partes independentes:
 ## Instalação
 
 ```bash
-pip install dgb-mlflow          # ou: pip install ./client (deste repo)
+pip install "git+https://github.com/destaquesgovbr/ml-platform.git@main#subdirectory=client"
 ```
+
+Isso traz `mlflow`, `google-auth` e `google-cloud-storage` (necessário para os
+artefatos no GCS) como dependências. Para desenvolvimento, de dentro do repo,
+`pip install -e ./client` também funciona.
 
 ## Uso
 

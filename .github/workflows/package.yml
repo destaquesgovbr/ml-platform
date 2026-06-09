@@ -1,0 +1,60 @@
+name: Package — dgb-mlflow (build)
+
+# Builda o pacote `dgb-mlflow` (wheel + sdist) e valida a instalação num
+# ambiente limpo (offline; sem GCP/WIF). Em tags `v*`, anexa os artefatos a um
+# GitHub Release. O método primário de distribuição é o git-install:
+#   pip install "git+https://github.com/destaquesgovbr/ml-platform.git@main#subdirectory=client"
+on:
+  push:
+    branches: [main]
+    paths:
+      - "client/**"
+      - ".github/workflows/package.yml"
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - "client/**"
+      - ".github/workflows/package.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build + smoke install
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Build wheel + sdist
+        working-directory: client
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+          python -m build
+
+      - name: Smoke install (clean venv) + import + entry point
+        working-directory: client
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --upgrade pip
+          /tmp/smoke/bin/pip install dist/*.whl
+          /tmp/smoke/bin/python -c "import dgb_mlflow; print('version:', dgb_mlflow.__version__)"
+          /tmp/smoke/bin/python -c "from mlflow.tracking.request_header.registry import _request_header_provider_registry as r; names=[type(p).__name__ for p in r._registry]; print(names); assert 'IAPRequestHeaderProvider' in names, 'IAP provider entry point não descoberto'"
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dgb-mlflow-dist
+          path: client/dist/*
+
+      - name: Attach to GitHub Release (tags v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: client/dist/*

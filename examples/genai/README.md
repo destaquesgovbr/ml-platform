@@ -74,7 +74,9 @@ Para logar no servidor remoto (em vez do SQLite local), instale a `dgb-mlflow` (
 `google-cloud-storage` para artefatos no GCS) e use `configure()`:
 
 ```bash
-pip install -e ../../client                      # dgb-mlflow (+ google-cloud-storage, google-auth)
+# git-install (traz google-cloud-storage + google-auth para artefatos no GCS)
+pip install "git+https://github.com/destaquesgovbr/ml-platform.git@main#subdirectory=client"
+# de dentro do repo, `pip install -e ../../client` também funciona para dev
 gcloud auth application-default login            # desktop
 export DGB_MLFLOW_TRACKING_URI="https://destaquesgovbr-mlflow-klvx64dufq-rj.a.run.app"
 python -c "import dgb_mlflow; dgb_mlflow.configure()"  # antes de importar/usar o pipeline

@@ -23,7 +23,12 @@ Exemplos executáveis acompanham os tutoriais:
 - [`../examples/traditional/`](../examples/traditional/) — ML tradicional (sklearn/BERT) com autolog + Model Registry.
 - [`../examples/genai/`](../examples/genai/) — GenAI (tracing, `mlflow.models.evaluate`, prompt registry).
 
-A biblioteca cliente que esconde a complexidade do IAP vive em [`../client/`](../client/) (`dgb-mlflow`).
+A biblioteca cliente que esconde a complexidade do IAP vive em [`../client/`](../client/) (`dgb-mlflow`)
+e instala-se direto do git:
+
+```bash
+pip install "git+https://github.com/destaquesgovbr/ml-platform.git@main#subdirectory=client"
+```
 
 ## Os valores que você vai precisar
 

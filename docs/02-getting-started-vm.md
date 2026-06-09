@@ -44,8 +44,8 @@ gcloud auth application-default print-access-token >/dev/null && echo "ADC OK"
 
 ```bash
 python -m venv .venv && source .venv/bin/activate     # sempre use venv
-pip install -e /caminho/para/ml-platform/client       # path local do repo
-# (no futuro): pip install dgb-mlflow
+pip install "git+https://github.com/destaquesgovbr/ml-platform.git@main#subdirectory=client"
+# para desenvolvimento, de dentro do repo: pip install -e /caminho/para/ml-platform/client
 ```
 
 ## Passo 3 — Variável de ambiente
